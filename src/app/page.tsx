@@ -1,4 +1,4 @@
-/** Landing `/` → login (middleware handles authenticated redirects elsewhere). */
+/** Landing `/` → login (proxy handles authenticated redirects elsewhere). */
 import { redirect } from "next/navigation";
 
 export default function Home() {
