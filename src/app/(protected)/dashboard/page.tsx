@@ -5,9 +5,16 @@
  * and sessionStorage persistence for break UI across reloads (same tab).
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { skipToken } from "@reduxjs/toolkit/query";
-import Cookies from "js-cookie";
 import { readAgentSessionCookies } from "@/lib/auth-cookies";
 import { getRtkErrorMessage } from "@/lib/rtk-error-message";
 import {
@@ -148,6 +155,20 @@ const readBreakUiFromSession = (): {
   }
 };
 
+const noopSubscribe = () => () => {};
+
+/**
+ * Bearer token from cookies without SSR/client hydration mismatches.
+ * Server snapshot is always undefined; after hydration the client snapshot reads cookies.
+ */
+function useHydrationSafeAccessToken(): string | undefined {
+  return useSyncExternalStore(
+    noopSubscribe,
+    () => readAgentSessionCookies().accessToken,
+    () => undefined,
+  );
+}
+
 export default function DashboardPage() {
   const { isDark } = useTheme();
   const [selectedBreakType, setSelectedBreakType] = useState("NOT_ON_BREAK");
@@ -160,12 +181,7 @@ export default function DashboardPage() {
   const skipNextBreakUiPersistRef = useRef(true);
   const [toasts, setToasts] = useState<Array<{ id: number; kind: "success" | "error"; message: string }>>([]);
   const [callCardRefresh, setCallCardRefresh] = useState(0);
-  /** Cookies only exist in the browser; reading synchronously here breaks SSR hydration vs client (e.g. refresh `disabled`). */
-  const [clientAccessToken, setClientAccessToken] = useState<string | undefined>(undefined);
-
-  useEffect(() => {
-    setClientAccessToken(readAgentSessionCookies().accessToken);
-  }, []);
+  const clientAccessToken = useHydrationSafeAccessToken();
 
   const dialedLeadsQuery = useGetLeadsQuery(
     clientAccessToken ? { accessToken: clientAccessToken, is_dialed: true } : skipToken,
