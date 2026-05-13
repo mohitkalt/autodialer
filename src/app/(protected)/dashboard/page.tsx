@@ -486,10 +486,6 @@ export default function DashboardPage() {
                 </svg>
               </button>
             </div>
-            <p className={`mt-2 max-w-3xl text-sm ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>
-              Dialer monitoring: completed calls on the left, remaining queue on the right. Both panels use the same feed
-              today (split by dial status); dedicated API filters can be wired later.
-            </p>
           </div>
 
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 lg:pt-1">
