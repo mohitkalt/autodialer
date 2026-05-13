@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { skipToken } from "@reduxjs/toolkit/query";
 import Cookies from "js-cookie";
 import { readAgentSessionCookies } from "@/lib/auth-cookies";
 import { getRtkErrorMessage } from "@/lib/rtk-error-message";
@@ -13,19 +14,22 @@ import {
   BreakPolicy,
   LeadRow,
   isShiftActiveFromApi,
+  leadsArrayFromResponse,
   shiftFromActiveShiftResponse,
   useEndBreakMutation,
   useEndShiftMutation,
+  useGetLeadsQuery,
   useLazyGetActiveShiftQuery,
   useLazyGetDialerConfigQuery,
-  useLazyGetLeadsQuery,
   useStartBreakMutation,
   useStartShiftMutation,
-} from "@/redux/services/authApi";
+} from "@/redux/services/dialerApi";
+import CallStatusCard from "@/components/dashboard/call-status-card";
 import DataTable from "@/components/table/data-table";
 import { useTheme } from "@/components/theme-provider";
 
-const LEAD_COLUMNS: Array<{
+/** Columns for split monitoring tables (dial status implied by panel). */
+const MONITOR_COLUMNS: Array<{
   key: keyof LeadRow;
   header: string;
   render?: (value: LeadRow[keyof LeadRow]) => React.ReactNode;
@@ -34,13 +38,6 @@ const LEAD_COLUMNS: Array<{
   { key: "name", header: "Name" },
   { key: "phone", header: "Phone" },
   { key: "email", header: "Email" },
-  { key: "owner_email", header: "Owner" },
-  { key: "created_at", header: "Created At" },
-  {
-    key: "is_dialed",
-    header: "Dialed",
-    render: (value) => ((value as LeadRow["is_dialed"]) ? "Yes" : "No"),
-  },
 ];
 
 const toFriendlyBreakLabel = (value: string) =>
@@ -120,7 +117,9 @@ function toolbarOutlineRose(isDark: boolean): string {
 /** Toast border/background for success vs error in dark or light theme. */
 function toastVariantClasses(kind: "success" | "error", isDark: boolean): string {
   if (kind === "success") {
-    return isDark ? "border-emerald-700 bg-emerald-900/95 text-emerald-100" : "border-emerald-600 bg-emerald-50 text-emerald-900";
+    return isDark
+      ? "border-emerald-700 bg-emerald-900/95 text-emerald-100"
+      : "border-emerald-600 bg-emerald-50 text-emerald-900";
   }
   return isDark ? "border-red-700 bg-red-900/95 text-red-100" : "border-red-600 bg-red-50 text-red-900";
 }
@@ -160,7 +159,21 @@ export default function DashboardPage() {
   const breakUiRestoredRef = useRef(false);
   const skipNextBreakUiPersistRef = useRef(true);
   const [toasts, setToasts] = useState<Array<{ id: number; kind: "success" | "error"; message: string }>>([]);
-  const [getLeads, { data: leadsResponse }] = useLazyGetLeadsQuery();
+  const [callCardRefresh, setCallCardRefresh] = useState(0);
+  /** Cookies only exist in the browser; reading synchronously here breaks SSR hydration vs client (e.g. refresh `disabled`). */
+  const [clientAccessToken, setClientAccessToken] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    setClientAccessToken(readAgentSessionCookies().accessToken);
+  }, []);
+
+  const dialedLeadsQuery = useGetLeadsQuery(
+    clientAccessToken ? { accessToken: clientAccessToken, is_dialed: true } : skipToken,
+  );
+  const undialedLeadsQuery = useGetLeadsQuery(
+    clientAccessToken ? { accessToken: clientAccessToken, is_dialed: false } : skipToken,
+  );
+  const isLeadsRefreshing = dialedLeadsQuery.isFetching || undialedLeadsQuery.isFetching;
   const [getDialerConfig, { data: dialerConfigResponse }] = useLazyGetDialerConfigQuery();
   const [getActiveShift] = useLazyGetActiveShiftQuery();
   const [startBreak, { isLoading: isStartingBreak }] = useStartBreakMutation();
@@ -169,12 +182,11 @@ export default function DashboardPage() {
   const [endShift, { isLoading: isEndingShift }] = useEndShiftMutation();
 
   const syncShiftFromServer = useCallback(async () => {
-    const { email: agentEmail, accessToken } = readAgentSessionCookies();
-    if (!agentEmail) return;
+    const { accessToken } = readAgentSessionCookies();
+    if (!accessToken) return;
     try {
       const res = await getActiveShift({
-        agentEmail,
-        accessToken: accessToken || undefined,
+        accessToken,
       }).unwrap();
       const shift = shiftFromActiveShiftResponse(res);
       if (isShiftActiveFromApi(shift ?? undefined)) {
@@ -190,20 +202,16 @@ export default function DashboardPage() {
   }, [getActiveShift]);
 
   useEffect(() => {
-    const { email, accessToken } = readAgentSessionCookies();
+    const { accessToken } = readAgentSessionCookies();
 
-    if (!email) return;
+    if (!accessToken) return;
 
-    getLeads({
-      leadOwner: email,
-      accessToken,
-    });
     getDialerConfig({
       accessToken,
     });
     // eslint-disable-next-line react-hooks/set-state-in-effect -- async GET updates shift state when promise settles (not synchronous cascade)
     void syncShiftFromServer();
-  }, [getLeads, getDialerConfig, syncShiftFromServer]);
+  }, [getDialerConfig, syncShiftFromServer]);
 
   useLayoutEffect(() => {
     const stored = readBreakUiFromSession();
@@ -240,7 +248,8 @@ export default function DashboardPage() {
     }
   }, [selectedBreakType, activeBreakId, activeBreak]);
 
-  const leadRows = useMemo(() => leadsResponse?.data ?? [], [leadsResponse]);
+  const dialedRows = useMemo(() => leadsArrayFromResponse(dialedLeadsQuery.data), [dialedLeadsQuery.data]);
+  const undialedRows = useMemo(() => leadsArrayFromResponse(undialedLeadsQuery.data), [undialedLeadsQuery.data]);
   const breakPolicies = dialerConfigResponse?.data?.breakPolicies ?? [];
   const pushToast = (kind: "success" | "error", message: string) => {
     const id = Date.now() + Math.floor(Math.random() * 1000);
@@ -294,10 +303,10 @@ export default function DashboardPage() {
 
   /** End break anytime (before or after allowed duration). Sends earlyEnd when still inside allowed window. */
   const performEndBreak = async () => {
-    const { email: agentEmail, accessToken } = readAgentSessionCookies();
+    const { accessToken } = readAgentSessionCookies();
 
-    if (!agentEmail) {
-      pushToast("error", "Agent email not found.");
+    if (!accessToken) {
+      pushToast("error", "Session expired. Sign in again.");
       return;
     }
 
@@ -315,7 +324,6 @@ export default function DashboardPage() {
     try {
       const response = await endBreak({
         breakId: breakIdToEnd,
-        agentEmail,
         accessToken,
         ...(earlyEnd ? { earlyEnd: true } : {}),
       }).unwrap();
@@ -331,10 +339,10 @@ export default function DashboardPage() {
 
   // Break update button: NOT_ON_BREAK ends break, other values start break.
   const triggerBreakStatus = async () => {
-    const { email: agentEmail, accessToken } = readAgentSessionCookies();
+    const { accessToken } = readAgentSessionCookies();
 
-    if (!agentEmail) {
-      pushToast("error", "Agent email not found.");
+    if (!accessToken) {
+      pushToast("error", "Session expired. Sign in again.");
       return;
     }
 
@@ -351,7 +359,6 @@ export default function DashboardPage() {
 
     try {
       const response = await startBreak({
-        agentEmail,
         breakType: selectedPolicy.break_type,
         reason: `${toFriendlyBreakLabel(selectedPolicy.break_type)} break`,
         accessToken,
@@ -386,23 +393,15 @@ export default function DashboardPage() {
 
   // Shift button toggles start/end shift using the latest known shift id.
   const triggerShiftStatus = async () => {
-    const { email: agentEmail, accessToken } = readAgentSessionCookies();
-    const agentNum = Cookies.get("auth_user_phone") ?? "7055170328";
-
-    if (!agentEmail) {
-      pushToast("error", "Agent email not found.");
-      return;
-    }
+    const { accessToken } = readAgentSessionCookies();
 
     if (isShiftActive && activeShiftId) {
       try {
-        const response = await endShift({
+        await endShift({
           shiftId: activeShiftId,
-          agentEmail,
           accessToken,
         }).unwrap();
         await syncShiftFromServer();
-        pushToast("success", response.message || "Shift ended successfully.");
       } catch (error) {
         pushToast("error", `Failed to end shift. ${getRtkErrorMessage(error)}`.trim());
       }
@@ -410,13 +409,11 @@ export default function DashboardPage() {
     }
 
     try {
-      const response = await startShift({
-        agentEmail,
-        agentNum,
+      await startShift({
         accessToken,
       }).unwrap();
       await syncShiftFromServer();
-      pushToast("success", response.message || "Shift started successfully.");
+      pushToast("success", "Shift started.");
     } catch (error) {
       pushToast("error", `Failed to start shift. ${getRtkErrorMessage(error)}`.trim());
     }
@@ -435,14 +432,51 @@ export default function DashboardPage() {
         ))}
       </div>
       <section className="mx-auto w-full max-w-6xl">
-        <h1 className="text-3xl font-semibold">Dashboard</h1>
-        <p className={`mt-2 text-sm ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>
-          Leads are fetched and displayed below.
-        </p>
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-3xl font-semibold tracking-tight">Leads Dashboard</h1>
+              <button
+                type="button"
+                aria-label="Refresh dialed and leads queues and last call"
+                disabled={isLeadsRefreshing}
+                onClick={() => {
+                  const { accessToken } = readAgentSessionCookies();
+                  if (!accessToken) {
+                    pushToast("error", "Session expired. Sign in again.");
+                    return;
+                  }
+                  void dialedLeadsQuery.refetch();
+                  void undialedLeadsQuery.refetch();
+                  setCallCardRefresh((n) => n + 1);
+                }}
+                className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                  isDark ? "border-zinc-700 text-zinc-300 hover:bg-zinc-800" : "border-zinc-300 text-zinc-700 hover:bg-zinc-100"
+                }`}
+              >
+                <svg
+                  className={`h-4 w-4 ${isLeadsRefreshing ? "animate-spin" : ""}`}
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  aria-hidden
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                  />
+                </svg>
+              </button>
+            </div>
+            <p className={`mt-2 max-w-3xl text-sm ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>
+              Dialer monitoring: completed calls on the left, remaining queue on the right. Both panels use the same feed
+              today (split by dial status); dedicated API filters can be wired later.
+            </p>
+          </div>
 
-        <div className="mt-6 flex items-center justify-between">
-          <h2 className="text-xl font-semibold">Leads</h2>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 lg:pt-1">
             {activeBreak && breakTimerDisplay.text && (
               <div className={`rounded-md border px-3 py-2 text-xs font-medium ${breakTimerClass}`}>
                 {breakTimerDisplay.text}
@@ -504,13 +538,31 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div className="mt-4">
-          <DataTable<LeadRow>
-            title="LeadSquared Leads"
-            columns={LEAD_COLUMNS}
-            rows={leadRows}
-            emptyText="No leads available."
-          />
+        <div className="mt-8">
+          <CallStatusCard refreshToken={callCardRefresh} />
+        </div>
+
+        <div className="mt-6 grid min-h-0 gap-4 lg:grid-cols-2 lg:items-start">
+          <div className="min-h-0">
+            <DataTable<LeadRow>
+              accent="emerald"
+              title={`Dialed · ${dialedRows.length}`}
+              columns={MONITOR_COLUMNS}
+              rows={dialedRows}
+              emptyText="No dialed leads yet."
+              boundedScroll
+            />
+          </div>
+          <div className="min-h-0">
+            <DataTable<LeadRow>
+              accent="amber"
+              title={`Leads · ${undialedRows.length}`}
+              columns={MONITOR_COLUMNS}
+              rows={undialedRows}
+              emptyText="No undialed leads in queue."
+              boundedScroll
+            />
+          </div>
         </div>
       </section>
     </main>

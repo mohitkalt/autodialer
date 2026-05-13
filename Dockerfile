@@ -7,9 +7,10 @@
 # your repo; not committed to git). Then:
 #   docker build -t autodialer .
 #
-# Option B — no env file; pass the API URL at build time:
+# Option B — pass URLs at build time (login proxies vs everything else):
 #   docker build -t autodialer \
-#     --build-arg NEXT_PUBLIC_API_BASE_URL=https://api.alt-mobility.com \
+#     --build-arg NEXT_PUBLIC_API_BASE_URL=https://api.example.com \
+#     --build-arg NEXT_PUBLIC_AUTH_BASE_URL=https://auth.example.com \
 #     .
 #
 # Run:
@@ -35,17 +36,22 @@ ARG NEXT_PUBLIC_API_BASE_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN if [ -n "$NEXT_PUBLIC_API_BASE_URL" ]; then \
-      export NEXT_PUBLIC_API_BASE_URL="$NEXT_PUBLIC_API_BASE_URL"; \
-    fi && \
-    npm run build
+  export NEXT_PUBLIC_API_BASE_URL="$NEXT_PUBLIC_API_BASE_URL"; \
+  fi && \
+  npm run build
 
 FROM node:20-alpine AS runner
 WORKDIR /app
+
+ARG NEXT_PUBLIC_API_BASE_URL
+ARG NEXT_PUBLIC_AUTH_BASE_URL
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
+ENV NEXT_PUBLIC_AUTH_BASE_URL=${NEXT_PUBLIC_AUTH_BASE_URL}
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev

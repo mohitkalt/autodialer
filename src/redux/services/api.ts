@@ -1,5 +1,6 @@
 /**
  * Shared RTK Query API shell: same-origin base URL, credentials, and Bearer from cookies when present.
+ * Endpoints are injected from `authApi.ts` (login / permission) and `dialerApi.ts` (leads / dialer / shifts).
  */
 // src/redux/services/api.ts
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
@@ -11,9 +12,9 @@ export const api = createApi({
     baseUrl: "/",
     credentials: "include",
     prepareHeaders: (headers) => {
-      const token = Cookies.get("token") ?? Cookies.get("accessToken");
+      const token = Cookies.get("accessToken") ?? Cookies.get("token");
 
-      if (token) {
+      if (token && token !== "true") {
         headers.set("authorization", `Bearer ${token}`);
       }
       headers.set("accept", "application/json");

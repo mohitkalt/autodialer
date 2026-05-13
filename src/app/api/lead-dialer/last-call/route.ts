@@ -1,13 +1,12 @@
-/** Proxies LeadSquared leads list — agent resolved upstream via cookies / Authorization. */
+/** Proxies last completed / attempted call + lead snapshot to the upstream lead-dialer API. */
 import { NextRequest, NextResponse } from "next/server";
-import { authenticatedProxyHeaders, requireApiBaseUrl } from "../../../_lib/upstream-headers";
+import { authenticatedProxyHeaders, requireApiBaseUrl } from "../../_lib/upstream-headers";
 
 export async function GET(request: NextRequest) {
   const base = requireApiBaseUrl();
   if (typeof base !== "string") return base;
 
-  const query = request.nextUrl.search;
-  const upstream = await fetch(`${base}/leadsquared/leads${query}`, {
+  const upstream = await fetch(`${base}/lead-dialer/last-call`, {
     method: "GET",
     headers: authenticatedProxyHeaders(request),
     cache: "no-store",
