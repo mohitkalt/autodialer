@@ -1,5 +1,4 @@
-/** Redux store wiring RTK Query reducer + middleware for `api`. */
-// src/redux/store.ts
+/** Redux store + RTK Query middleware. Side-effect imports register `authApi` / `dialerApi` endpoints on `api`. */
 import { configureStore } from "@reduxjs/toolkit";
 import { api } from "./services/api";
 import "./services/authApi";

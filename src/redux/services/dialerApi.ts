@@ -1,5 +1,6 @@
 /**
  * Lead / dialer RTK endpoints (same-origin `/api/*` → Next proxies).
+ * `getDialedLeads` / `getUndialedLeads` mirror upstream `is_dialed` so tabs can load counts independently.
  * Auth flows live in `authApi.ts`.
  */
 import type {
@@ -13,10 +14,9 @@ import { api } from "./api";
 
 type AppBaseQuery = BaseQueryFn<string | FetchArgs, unknown, FetchBaseQueryError, unknown, FetchBaseQueryMeta>;
 
-type LeadsPayload = {
+type LeadsQueryPayload = {
+  /** Bearer from cookies — callers pass after OTP login. */
   accessToken?: string;
-  /** Passed through as `?is_dialed=true` / `false` on the upstream leads list. */
-  is_dialed: boolean;
 };
 
 export type LeadRow = {
@@ -232,9 +232,22 @@ export type LastCallResponse = {
 
 export const dialerApi = api.injectEndpoints({
   endpoints: (builder) => ({
-    getLeads: builder.query<LeadsResponse, LeadsPayload>({
-      query: ({ accessToken, is_dialed }: LeadsPayload) => ({
-        url: `/api/vehicle/leadsquared/leads?${new URLSearchParams({ is_dialed: String(is_dialed) })}`,
+    /** Dialed/completed leads (`is_dialed=true`) — second tab. */
+    getDialedLeads: builder.query<LeadsResponse, LeadsQueryPayload>({
+      query: ({ accessToken }: LeadsQueryPayload) => ({
+        url: `/api/vehicle/leadsquared/leads?${new URLSearchParams({ is_dialed: "true" })}`,
+        headers: accessToken
+          ? {
+              authorization: `Bearer ${accessToken}`,
+            }
+          : undefined,
+      }),
+    }),
+
+    /** Queue leads (`is_dialed=false`) — default tab. */
+    getUndialedLeads: builder.query<LeadsResponse, LeadsQueryPayload>({
+      query: ({ accessToken }: LeadsQueryPayload) => ({
+        url: `/api/vehicle/leadsquared/leads?${new URLSearchParams({ is_dialed: "false" })}`,
         headers: accessToken
           ? {
               authorization: `Bearer ${accessToken}`,
@@ -338,8 +351,8 @@ export const dialerApi = api.injectEndpoints({
 });
 
 export const {
-  useGetLeadsQuery,
-  useLazyGetLeadsQuery,
+  useLazyGetDialedLeadsQuery,
+  useLazyGetUndialedLeadsQuery,
   useLazyGetDialerConfigQuery,
   useLazyGetLastCallQuery,
   useStartBreakMutation,

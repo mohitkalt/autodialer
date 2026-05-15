@@ -1,4 +1,7 @@
-/** Proxies LeadSquared leads list — agent resolved upstream via cookies / Authorization. */
+/**
+ * Proxies LeadSquared leads list (`GET /leadsquared/leads`). Forwards query string (e.g. `is_dialed=true|false`).
+ * Agent identity: upstream reads forwarded cookies / `Authorization`.
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { authenticatedProxyHeaders, requireApiBaseUrl } from "../../../_lib/upstream-headers";
 

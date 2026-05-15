@@ -19,7 +19,7 @@ type DataTableProps<T extends { id: number | string }> = {
    * instead of stretching the page. Sticky header inside the scroll region.
    */
   boundedScroll?: boolean;
-  /** Extra classes on the scroll viewport (only when `boundedScroll`). */
+  /** Optional classes merged into the horizontal (and vertical when `boundedScroll`) scroll wrapper. */
   scrollClassName?: string;
   /** Left accent stripe for monitoring panels. */
   accent?: "none" | "emerald" | "amber";

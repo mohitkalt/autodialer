@@ -1,5 +1,6 @@
 /**
- * Proxies permission lookup (`GET …/auth/permission`) with forwarded cookies and bearer token.
+ * Proxies agent permission lookup (`GET …/auth/permission?email=`).
+ * Client hook: `useLazyGetPermissionQuery` in `authApi.ts`; forwards cookies/bearer like other authenticated proxies.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { authenticatedProxyHeaders, requireApiBaseUrl } from "../../_lib/upstream-headers";

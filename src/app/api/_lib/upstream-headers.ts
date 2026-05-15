@@ -45,8 +45,7 @@ export function requireAuthBaseUrl(): string | NextResponse {
   return resolveBaseUrl(process.env.NEXT_PUBLIC_AUTH_BASE_URL, "NEXT_PUBLIC_AUTH_BASE_URL");
 }
 
-/** Origin / Referer sent to FleetOS-style upstream APIs (matches existing proxy behavior). */
-// will make it the same as the new url once deployed so that the proxy works
+/** Origin/Referer headers some FleetOS-style upstreams validate; update if deployment origin changes. */
 export function fleetOsOriginHeaders(): Record<string, string> {
   return {
     origin: "https://fleetos.alt-mobility.com",

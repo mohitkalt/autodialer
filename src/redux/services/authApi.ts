@@ -66,7 +66,10 @@ export const authApi = api.injectEndpoints({
       }),
     }),
 
-    /** Permission/modules gate — reserved for upcoming UI; hook exported as `useLazyGetPermissionQuery`. */
+    /**
+     * Permission/modules for the signed-in agent (`GET /api/auth/permission` → upstream `/auth/permission`).
+     * Reserved for future UI gating; exported as `useLazyGetPermissionQuery` alongside login mutations.
+     */
     getPermission: builder.query<PermissionResponse, PermissionPayload>({
       query: ({ email, accessToken }: PermissionPayload) => ({
         url: `/api/auth/permission?email=${encodeURIComponent(email)}`,

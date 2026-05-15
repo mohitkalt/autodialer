@@ -1,187 +1,153 @@
 # Autodialer
 
-Next.js (App Router) frontend for login, dashboard leads, and lead-dialer flows (breaks, shifts). It talks to a backend API through **Next.js route handlers** under `src/app/api/**` that proxy requests to `NEXT_PUBLIC_API_BASE_URL`.
+Next.js **16** (App Router) frontend for agent login and the **leads dashboard**: LeadSquared-style queues (dialed vs queue tabs), **last-call** snapshot, dialer **break/shift** controls, and dark/light theme. The browser calls **same-origin** `/api/*` routes; each handler proxies to your upstream APIs using **`NEXT_PUBLIC_AUTH_BASE_URL`** (login + OTP only) or **`NEXT_PUBLIC_API_BASE_URL`** (everything else, including permission lookup as routed today).
 
 ---
 
 ## Prerequisites
 
 - **Node.js ≥ 20.9** (required by Next.js 16)
-- **npm** (or compatible package manager)
+- **npm** (project ships `package-lock.json` for reproducible installs)
 
 ---
 
-## First-time setup
+## Environment variables
 
-1. **Clone the repository** and enter the project directory.
+Create **`.env.local`** for local dev (`npm run dev` loads it via `env-cmd`). Use **`.env.production`** for `npm run prod` / container runtime where applicable.
 
-2. **Install dependencies**
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `NEXT_PUBLIC_AUTH_BASE_URL` | **Yes** | Upstream base URL for **email login** and **OTP verify** only (`/api/auth/login/email`, `/api/auth/verify-otp`). Missing scheme is normalized server-side (e.g. internal IPs). |
+| `NEXT_PUBLIC_API_BASE_URL` | **Yes** | Upstream base URL for **leads**, **lead-dialer** (config, breaks, shifts, last-call), **permission** proxy, and other API routes under `/api/*` that use `requireApiBaseUrl`. |
+| `PORT` | No | HTTP port for `next dev` / `next start` (default **3000**). |
 
-   ```bash
-   npm install
-   ```
+Example:
 
-3. **Environment variables**
+```env
+NEXT_PUBLIC_AUTH_BASE_URL=https://your-auth.example.com
+NEXT_PUBLIC_API_BASE_URL=https://your-api.example.com
+PORT=3000
+```
 
-   Create **`.env.local`** in the project root (Next.js loads it automatically for local development). Do not commit secrets you consider sensitive; `.env.local` is normally gitignored.
-
-   | Variable | Required | Purpose |
-   |----------|----------|---------|
-   | `NEXT_PUBLIC_API_BASE_URL` | **Yes** | Base URL of the upstream API (no trailing slash). Used by all `src/app/api/**` proxy routes to forward auth, leads, dialer config, breaks, and shifts. |
-
-   Example:
-
-   ```env
-   NEXT_PUBLIC_API_BASE_URL=https://your-api.example.com
-   PORT=3000
-   ```
-
-   Optional:
-
-   | Variable | Purpose |
-   |----------|---------|
-   | `PORT` | HTTP port for **`next dev`** / **`next start`**. Set this in **`.env.local`** (dev) or **`.env.production`** (prod scripts). Next defaults to **3000** if omitted. |
-
-   **`npm run dev`**, **`npm run local`**, **`npm run prod`**, and **`npm run start:prod`** load those files via `env-cmd` first, so **`PORT` in the same file** is applied—do not rely on `-p` in the npm script.
-
-   Production builds may use **`.env.production`** with the same keys where applicable.
-
-4. **Run the dev server**
-
-   ```bash
-   npm run dev
-   ```
-
-   Open `http://localhost:<PORT>` (default **3000** if `PORT` is unset). The home route redirects to `/login`.
-
-   **`npm run dev`** and **`npm run local`** load environment variables from **`.env.local`** (via `env-cmd`). Create that file before running; without it, the command may fail.
+**Docker / CI:** `NEXT_PUBLIC_*` values are baked in at **`next build`**. Pass build-args as in `Dockerfile` comments when URLs differ per environment.
 
 ---
 
 ## Scripts
 
-| Command | Env file used | Description |
-|---------|----------------|-------------|
-| `npm run dev` | **`.env.local`** | Development server; **`PORT`** from `.env.local` (Next default **3000** if unset). |
-| `npm run local` | **`.env.local`** | Same as `dev` (alias). |
-| `npm run prod` | **`.env.production`** | **`next build`** then **`next start`**; **`PORT`** from `.env.production`. |
-| `npm run start:prod` | **`.env.production`** | Production server only; **`PORT`** from `.env.production`. |
-| `npm run build` | Shell / CI env | Plain `next build` (no forced file; use for CI when vars are injected another way). |
-| `npm run start` | Shell / CI env | Plain `next start`. |
-| `npm run lint` | — | ESLint. |
-
-Next.js still merges its own env loading rules in addition to variables injected by `env-cmd`; forcing `-f .env.local` / `-f .env.production` makes the intended file the primary source for those runs.
+| Command | Env file | Description |
+|---------|-----------|-------------|
+| `npm run dev` | `.env.local` | Development server. |
+| `npm run local` | `.env.local` | Alias of `dev`. |
+| `npm run build` | shell / CI | Production build only (no `env-cmd` file). |
+| `npm run start` | shell / CI | Production server (expects env already set). |
+| `npm run prod` | `.env.production` | `next build` then `next start` with that file. |
+| `npm run start:prod` | `.env.production` | `next start` only. |
+| `npm run lint` | — | ESLint (`eslint` via Next config). |
 
 ---
 
-## Project flow (high level)
-
-1. **`/`** → redirects to **`/login`** (`src/app/page.tsx`).
-2. User signs in with email/password → OTP verification; tokens and email are stored in **cookies** (`js-cookie` on the client).
-3. **`src/middleware.ts`** guards **`/login`** vs **`/dashboard`**: no `token` cookie → redirect to `/login`; with token on `/login` → redirect to `/dashboard`.
-4. **Protected UI** (`src/app/(protected)/`) shows the shell (nav, theme toggle, logout) and pages like the dashboard.
-5. **Data fetching**: React components use **RTK Query** (`src/redux/services/authApi.ts`) → HTTP calls go to **same-origin** paths like `/api/auth/...`, `/api/vehicle/...`, `/api/lead-dialer/...` → **Route handlers** proxy to `NEXT_PUBLIC_API_BASE_URL` with forwarded cookies/authorization.
+## Architecture (high level)
 
 ```text
-Browser → Next.js page (RTK Query) → /api/* route handler → upstream API (NEXT_PUBLIC_API_BASE_URL)
+Browser (React + Redux / RTK Query)
+    → same-origin GET/POST/PATCH `/api/...`
+    → Next route handlers (`src/app/api/**/route.ts`)
+    → upstream `NEXT_PUBLIC_AUTH_BASE_URL` OR `NEXT_PUBLIC_API_BASE_URL`
 ```
+
+1. **`/`** redirects to **`/login`** (`src/app/page.tsx`).
+2. **`src/proxy.ts`** (Next “proxy” convention): redirects unauthenticated users away from `/dashboard` and signed-in users away from `/login` (matcher: `/dashboard/:path*`, `/login`).
+3. Login sets **`token`** / **`accessToken`** (and related) cookies via OTP flow (`src/app/(auth)/login/page.tsx`).
+4. **Protected UI** (`src/app/(protected)/`) uses **`ProtectedShell`**: nav, theme toggle, logout.
+5. **Dashboard** (`src/app/(protected)/dashboard/page.tsx`): MUI tabs for **queue leads** vs **dialed leads** (`is_dialed` query param on upstream); toolbar refresh refetches both lists + last-call card; break/shift actions via RTK mutations.
 
 ---
 
-## Folder structure
+## Redux / RTK Query
+
+| Module | Role |
+|--------|------|
+| `src/redux/services/api.ts` | Shared `createApi`, `fetchBaseQuery` (`baseUrl: "/"`, cookies, Bearer prefers `accessToken`, skips literal `token=true`). |
+| `src/redux/services/authApi.ts` | **Login**, **verify OTP**, **`getPermission`** (lazy hook reserved for future UI gating). Side-effect import in `store.ts` registers endpoints. |
+| `src/redux/services/dialerApi.ts` | **Dialed / undialed leads**, dialer **config**, **breaks**, **shifts**, **last-call**. |
+| `src/redux/store.ts` | Store + `api` middleware; imports `authApi` and `dialerApi` so injected endpoints register. |
+
+---
+
+## Main UI pieces
+
+| Area | Location |
+|------|-----------|
+| Login + OTP | `src/app/(auth)/login/page.tsx` |
+| Dashboard | `src/app/(protected)/dashboard/page.tsx` |
+| Last call card | `src/components/dashboard/call-status-card.tsx` |
+| Lead tabs (MUI) | `src/components/dashboard/leads-queue-tabs.tsx`, `tab-panel.tsx` |
+| Shared table | `src/components/table/data-table.tsx` |
+| Theme (default light) | `src/components/theme-provider.tsx` |
+
+---
+
+## API proxies (selection)
+
+| App route | Typical upstream (via env) |
+|-----------|---------------------------|
+| `POST /api/auth/login/email` | `{AUTH}/auth/login/email` |
+| `POST /api/auth/verify-otp` | `{AUTH}/auth/login/verify-otp` |
+| `GET /api/auth/permission` | `{API}/auth/permission` |
+| `GET /api/vehicle/leadsquared/leads` | `{API}/leadsquared/leads` (+ query e.g. `is_dialed=true|false`) |
+| `GET /api/lead-dialer/*` | `{API}/lead-dialer/*` |
+
+Shared proxy helpers: `src/app/api/_lib/upstream-headers.ts` (URL normalization, cookie/Bearer forwarding, FleetOS-style Origin headers for login).
+
+---
+
+## Folder layout (abbrev.)
 
 ```text
-autodialer/
-├── .env.local                 # Local env (create yourself; not committed by default)
-├── .env.production          # Production env example / deployment
-├── package.json
-├── README.md
-├── FRONTEND_API_LOGIN_FLOW.md   # Extra docs: login/API flow
-├── LOGIN_CHANGES.md             # Auth/login change notes (if present)
-├── src/
-│   ├── middleware.ts          # Auth redirects for /login and /dashboard
-│   ├── app/
-│   │   ├── layout.tsx         # Root layout: fonts, Redux + Theme providers
-│   │   ├── globals.css        # Global styles (Tailwind)
-│   │   ├── page.tsx           # "/" → redirect /login
-│   │   ├── (auth)/            # Route group: unauthenticated pages (URL has no "(auth)" segment)
-│   │   │   ├── layout.tsx     # Passthrough layout for auth routes
-│   │   │   └── login/
-│   │   │       └── page.tsx   # Login + OTP UI
-│   │   ├── (protected)/       # Route group: logged-in area
-│   │   │   ├── layout.tsx     # Wraps children with ProtectedShell (nav, theme)
-│   │   │   ├── protected-shell.tsx
-│   │   │   ├── logout-button.tsx
-│   │   │   └── dashboard/
-│   │   │       └── page.tsx   # Dashboard (leads table, breaks, shift)
-│   │   └── api/               # Next.js Route Handlers (server-side proxies)
-│   │       ├── auth/          # login, verify-otp, permission
-│   │       ├── vehicle/       # e.g. LeadSquared leads
-│   │       └── lead-dialer/   # config, breaks, shifts
-│   ├── components/
-│   │   ├── theme-provider.tsx # Dark/light theme + localStorage
-│   │   ├── theme-toggle.tsx
-│   │   └── table/
-│   │       └── data-table.tsx # Reusable table for leads
-│   └── redux/
-│       ├── provider.tsx       # Redux Provider for client components
-│       ├── store.ts           # RTK store + api middleware
-│       └── services/
-│           ├── api.ts         # createApi + fetchBaseQuery (baseUrl "/", credentials)
-│           └── authApi.ts     # Endpoints: auth, leads, dialer, breaks, shifts
+src/
+├── proxy.ts                    # Auth redirects /dashboard ↔ /login
+├── app/
+│   ├── layout.tsx
+│   ├── page.tsx                # / → /login
+│   ├── (auth)/login/
+│   ├── (protected)/            # dashboard, shell, logout
+│   └── api/
+│       ├── auth/               # login, verify-otp, permission
+│       ├── vehicle/leadsquared/leads/
+│       └── lead-dialer/        # config, breaks, shifts, last-call
+├── components/                 # theme, dashboard widgets, data-table
+├── lib/                        # auth cookies, RTK error helpers
+└── redux/
 ```
 
----
-
-## Adding new pages
-
-### Page under **login / public** (no shell)
-
-- Add a folder under **`src/app/(auth)/`**, e.g. `src/app/(auth)/register/page.tsx` → URL **`/register`**.
-- If the route must be reachable **without** a token, extend **`src/middleware.ts`**:
-  - Treat that path like `/login` in `isAuthPage`, or add it to the matcher so unauthenticated users are not redirected away incorrectly.
-
-### Page under **dashboard / authenticated** (with top nav)
-
-- Add under **`src/app/(protected)/`**, e.g. `src/app/(protected)/settings/page.tsx` → URL **`/settings`**.
-- **`middleware.ts`** currently matches **`/dashboard/:path*`** and **`/login`**. For other protected URLs you should **expand `matcher`** (and redirect logic if needed) so unauthenticated users hitting `/settings` are sent to `/login`.
-
-### New API integration
-
-1. Add a **route handler** under **`src/app/api/.../route.ts`** that proxies to `NEXT_PUBLIC_API_BASE_URL` (follow existing auth/vehicle/lead-dialer patterns).
-2. Register endpoints in **`src/redux/services/authApi.ts`** (or a new slice injected into **`src/redux/services/api.ts`**).
-3. Use generated hooks from **`authApi`** in your client page.
-
-### Shared UI
-
-- Put reusable pieces in **`src/components/`**.
-- Use **`src/components/table/data-table.tsx`** for tabular data when it fits.
+Static assets: **`public/`** (may contain only `.gitkeep` until you add files).
 
 ---
 
-## Key files (purpose)
+## Docker
 
-| File | Purpose |
-|------|---------|
-| `src/middleware.ts` | Cookie-based gate between `/login` and `/dashboard`. |
-| `src/app/layout.tsx` | HTML shell, fonts, `ReduxProvider`, `ThemeProvider`. |
-| `src/app/page.tsx` | Root `/` redirect to `/login`. |
-| `src/app/(protected)/layout.tsx` | Wraps protected routes with `ProtectedShell`. |
-| `src/app/(protected)/protected-shell.tsx` | Header, nav, theme toggle, logout. |
-| `src/app/(protected)/dashboard/page.tsx` | Main dashboard: leads, breaks, shifts, session UI state. |
-| `src/app/(auth)/login/page.tsx` | Email/password + OTP login. |
-| `src/redux/services/api.ts` | RTK Query `createApi`, `fetchBaseQuery`, cookie header prep. |
-| `src/redux/services/authApi.ts` | All API endpoint definitions consumed by the UI. |
-| `src/app/api/**/route.ts` | Server proxies to upstream API; env: `NEXT_PUBLIC_API_BASE_URL`. |
+See **`Dockerfile`**: multi-stage image, `npm ci`, `npm run build`, production `npm run start`. Ensure **`public/`** exists in the repo (e.g. `public/.gitkeep`) so `COPY … /public` succeeds.
+
+Optional: **`.github/workflows/`** for CI/CD (build, push image, deploy).
 
 ---
 
-## Additional documentation
+## Adding features
 
-- **`FRONTEND_API_LOGIN_FLOW.md`** — Login and API integration details (if present in the repo).
+- **New authenticated page:** add under `src/app/(protected)/` and extend **`src/proxy.ts`** `matcher` if the path must be cookie-gated like `/dashboard`.
+- **New upstream API:** add `src/app/api/.../route.ts`, then inject endpoints into **`dialerApi`** or **`authApi`** (keep login-only traffic on auth base URL).
+- **Permission:** keep **`authApi.getPermission`** / **`useLazyGetPermissionQuery`** and **`src/app/api/auth/permission/route.ts`** aligned with your backend contract.
 
 ---
 
-## Deploy notes
+## Further docs (repo)
 
-- Prefer **`npm run prod`** locally or in scripts when you want **`.env.production`** values during both **build** and **start**, or set **`NEXT_PUBLIC_*`** in the hosting dashboard and use **`npm run build`** / **`npm run start`** there.
+- **`FRONTEND_API_LOGIN_FLOW.md`** — login/API notes  
+- **`LOGIN_CHANGES.md`**, **`DASHBOARD_CHANGES.md`** — historical change logs  
+
+---
+
+## Tech stack
+
+Next.js **16**, React **19**, TypeScript, Tailwind **4**, **Redux Toolkit / RTK Query**, **MUI** (tabs), **js-cookie**, **env-cmd** for env-specific scripts.

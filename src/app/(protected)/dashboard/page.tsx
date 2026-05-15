@@ -1,20 +1,14 @@
 "use client";
 
 /**
- * Dashboard: LeadSquared leads, dialer break controls + timer, shift start/end,
- * and sessionStorage persistence for break UI across reloads (same tab).
+ * Protected dashboard: LeadSquared queues (tabs), last-call card, dialer config/break/shift controls.
+ *
+ * - **Lead tabs**: RTK `getUndialedLeads` / `getDialedLeads` — both fetched once token exists so tab badges stay accurate.
+ * - **Hydration**: `useHydrationSafeAccessToken` avoids SSR/client mismatch on cookie-backed queries (see hook below).
+ * - **Break UI**: Timer + dropdown persisted in `sessionStorage` for same-tab reloads only.
  */
 
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
-import { skipToken } from "@reduxjs/toolkit/query";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { readAgentSessionCookies } from "@/lib/auth-cookies";
 import { getRtkErrorMessage } from "@/lib/rtk-error-message";
 import {
@@ -25,17 +19,18 @@ import {
   shiftFromActiveShiftResponse,
   useEndBreakMutation,
   useEndShiftMutation,
-  useGetLeadsQuery,
   useLazyGetActiveShiftQuery,
+  useLazyGetDialedLeadsQuery,
   useLazyGetDialerConfigQuery,
+  useLazyGetUndialedLeadsQuery,
   useStartBreakMutation,
   useStartShiftMutation,
 } from "@/redux/services/dialerApi";
 import CallStatusCard from "@/components/dashboard/call-status-card";
-import DataTable from "@/components/table/data-table";
+import LeadsQueueTabs from "@/components/dashboard/leads-queue-tabs";
 import { useTheme } from "@/components/theme-provider";
 
-/** Columns for split monitoring tables (dial status implied by panel). */
+/** Table columns for both queue tabs — maps `LeadRow` fields from `/leadsquared/leads`. */
 const MONITOR_COLUMNS: Array<{
   key: keyof LeadRow;
   header: string;
@@ -45,6 +40,7 @@ const MONITOR_COLUMNS: Array<{
   { key: "name", header: "Name" },
   { key: "phone", header: "Phone" },
   { key: "email", header: "Email" },
+  { key: "owner_email", header: "Owner" },
 ];
 
 const toFriendlyBreakLabel = (value: string) =>
@@ -82,6 +78,7 @@ const parseFiniteInt = (value: unknown): number | null => {
   return null;
 };
 
+/** Parses API/sessionStorage break payloads into dashboard timer state. */
 const normalizeActiveBreakFromStorage = (value: unknown): ActiveBreakState | null => {
   if (!value || typeof value !== "object") return null;
   const o = value as Record<string, unknown>;
@@ -101,6 +98,7 @@ const normalizeActiveBreakFromStorage = (value: unknown): ActiveBreakState | nul
   return { id, breakType, startedAtMs, allowedSeconds };
 };
 
+/** Loose shape for break rows nested under alternate API keys (`break_entry`). */
 type BreakEntryLike = {
   id?: unknown;
   started_at?: string;
@@ -131,6 +129,7 @@ function toastVariantClasses(kind: "success" | "error", isDark: boolean): string
   return isDark ? "border-red-700 bg-red-900/95 text-red-100" : "border-red-600 bg-red-50 text-red-900";
 }
 
+/** Reads persisted break/timer UI from sessionStorage (same-tab only). */
 const readBreakUiFromSession = (): {
   selectedBreakType: string;
   activeBreakId: number | null;
@@ -181,15 +180,21 @@ export default function DashboardPage() {
   const skipNextBreakUiPersistRef = useRef(true);
   const [toasts, setToasts] = useState<Array<{ id: number; kind: "success" | "error"; message: string }>>([]);
   const [callCardRefresh, setCallCardRefresh] = useState(0);
+  /** Tab index for `LeadsQueueTabs`: 0 = queue (undialed), 1 = dialed. */
+  const [leadTab, setLeadTab] = useState(0);
   const clientAccessToken = useHydrationSafeAccessToken();
 
-  const dialedLeadsQuery = useGetLeadsQuery(
-    clientAccessToken ? { accessToken: clientAccessToken, is_dialed: true } : skipToken,
-  );
-  const undialedLeadsQuery = useGetLeadsQuery(
-    clientAccessToken ? { accessToken: clientAccessToken, is_dialed: false } : skipToken,
-  );
-  const isLeadsRefreshing = dialedLeadsQuery.isFetching || undialedLeadsQuery.isFetching;
+  const [fetchDialedLeads, dialedLeadsState] = useLazyGetDialedLeadsQuery();
+  const [fetchUndialedLeads, undialedLeadsState] = useLazyGetUndialedLeadsQuery();
+
+  /** Load both lists when session exists so MUI tab labels show counts without switching tabs. */
+  useEffect(() => {
+    if (!clientAccessToken) return;
+    void fetchDialedLeads({ accessToken: clientAccessToken });
+    void fetchUndialedLeads({ accessToken: clientAccessToken });
+  }, [clientAccessToken, fetchDialedLeads, fetchUndialedLeads]);
+
+  const isLeadsRefreshing = dialedLeadsState.isFetching || undialedLeadsState.isFetching;
   const [getDialerConfig, { data: dialerConfigResponse }] = useLazyGetDialerConfigQuery();
   const [getActiveShift] = useLazyGetActiveShiftQuery();
   const [startBreak, { isLoading: isStartingBreak }] = useStartBreakMutation();
@@ -264,8 +269,8 @@ export default function DashboardPage() {
     }
   }, [selectedBreakType, activeBreakId, activeBreak]);
 
-  const dialedRows = useMemo(() => leadsArrayFromResponse(dialedLeadsQuery.data), [dialedLeadsQuery.data]);
-  const undialedRows = useMemo(() => leadsArrayFromResponse(undialedLeadsQuery.data), [undialedLeadsQuery.data]);
+  const dialedRows = useMemo(() => leadsArrayFromResponse(dialedLeadsState.data), [dialedLeadsState.data]);
+  const undialedRows = useMemo(() => leadsArrayFromResponse(undialedLeadsState.data), [undialedLeadsState.data]);
   const breakPolicies = dialerConfigResponse?.data?.breakPolicies ?? [];
   const pushToast = (kind: "success" | "error", message: string) => {
     const id = Date.now() + Math.floor(Math.random() * 1000);
@@ -454,7 +459,7 @@ export default function DashboardPage() {
               <h1 className="text-3xl font-semibold tracking-tight">Leads Dashboard</h1>
               <button
                 type="button"
-                aria-label="Refresh dialed and leads queues and last call"
+                aria-label="Refresh leads and dialed queues and last call"
                 disabled={isLeadsRefreshing}
                 onClick={() => {
                   const { accessToken } = readAgentSessionCookies();
@@ -462,12 +467,14 @@ export default function DashboardPage() {
                     pushToast("error", "Session expired. Sign in again.");
                     return;
                   }
-                  void dialedLeadsQuery.refetch();
-                  void undialedLeadsQuery.refetch();
+                  void fetchDialedLeads({ accessToken });
+                  void fetchUndialedLeads({ accessToken });
                   setCallCardRefresh((n) => n + 1);
                 }}
                 className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                  isDark ? "border-zinc-700 text-zinc-300 hover:bg-zinc-800" : "border-zinc-300 text-zinc-700 hover:bg-zinc-100"
+                  isDark
+                    ? "border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                    : "border-zinc-300 text-zinc-700 hover:bg-zinc-100"
                 }`}
               >
                 <svg
@@ -551,30 +558,19 @@ export default function DashboardPage() {
         </div>
 
         <div className="mt-8">
+          {/* Prop bumps when toolbar refresh runs — retriggers `getLastCall` inside the card. */}
           <CallStatusCard refreshToken={callCardRefresh} />
         </div>
 
-        <div className="mt-6 grid min-h-0 gap-4 lg:grid-cols-2 lg:items-start">
-          <div className="min-h-0">
-            <DataTable<LeadRow>
-              accent="emerald"
-              title={`Dialed · ${dialedRows.length}`}
-              columns={MONITOR_COLUMNS}
-              rows={dialedRows}
-              emptyText="No dialed leads yet."
-              boundedScroll
-            />
-          </div>
-          <div className="min-h-0">
-            <DataTable<LeadRow>
-              accent="amber"
-              title={`Leads · ${undialedRows.length}`}
-              columns={MONITOR_COLUMNS}
-              rows={undialedRows}
-              emptyText="No undialed leads in queue."
-              boundedScroll
-            />
-          </div>
+        {/* MUI tabs + shared `DataTable`; data from lazy RTK queries above. */}
+        <div className="mt-6 min-h-0">
+          <LeadsQueueTabs
+            value={leadTab}
+            onChange={(_, next) => setLeadTab(next)}
+            dialedRows={dialedRows}
+            undialedRows={undialedRows}
+            columns={MONITOR_COLUMNS}
+          />
         </div>
       </section>
     </main>

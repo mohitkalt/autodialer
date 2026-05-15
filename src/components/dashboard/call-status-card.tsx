@@ -52,7 +52,9 @@ function initialsFromName(name: string): string {
 }
 
 export type CallStatusCardProps = {
-  /** Increment from parent (e.g. dashboard refresh) to refetch last call. */
+  /**
+   * Increment from parent when global refresh runs — effect inside the card refetches `/lead-dialer/last-call`.
+   */
   refreshToken?: number;
 };
 
